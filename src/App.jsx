@@ -461,12 +461,92 @@ export default function App() {
     }
   }, []);
 
+  const [focusToast, setFocusToast] = useState(null)
+  const focusToastTimeoutRef = useRef(null)
+
+  const showFocusToast = useCallback((msg) => {
+    setFocusToast(msg)
+    if (focusToastTimeoutRef.current) clearTimeout(focusToastTimeoutRef.current)
+    focusToastTimeoutRef.current = setTimeout(() => setFocusToast(null), 2500)
+  }, [])
+
+  const stopSolveAndMarkDNF = useCallback(() => {
+    // Stop solve timer RAF
+    if (timerIntervalRef.current) cancelAnimationFrame(timerIntervalRef.current)
+
+    // If a solve is currently running, immediately invalidate it as DNF.
+    setData(prev => {
+      const activeSession = prev.sessions.find(s => s.id === prev.activeSessionId)
+      if (!activeSession) return prev
+
+      const newSolves = [...activeSession.solves, {
+        id: Date.now().toString(),
+        timeMs: 0,
+        scramble: scrambleRef.current.join(' '),
+        penalty: -1, // DNF
+        date: Date.now()
+      }]
+
+      return {
+        ...prev,
+        sessions: prev.sessions.map(s => s.id === prev.activeSessionId ? { ...s, solves: newSolves } : s)
+      }
+    })
+
+    setTimeMs(0)
+    setCubeVisible(true)
+    setAppState('STOPPED')
+  }, [setData])
+
+  const cancelInspection = useCallback(() => {
+    // Stop inspection RAF
+    if (inspectionIntervalRef.current) cancelAnimationFrame(inspectionIntervalRef.current)
+
+    setInspectionTimeMs(15000)
+    setTimeMs(0)
+    setCubeVisible(true)
+
+    // Returning focus should not continue an invalid session.
+    // Put app in STOPPED; user must start/inspect again.
+    setAppState('STOPPED')
+  }, [])
+
   const isFocusMode = appState === 'INSPECTING' || appState === 'READYING_RED' || appState === 'READYING_GREEN' || appState === 'RUNNING'
 
+  const invalidatedRef = useRef(false)
+
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        invalidatedRef.current = false
+
+        const state = appStateRef.current
+        if (state === 'RUNNING') {
+          invalidatedRef.current = true
+          stopSolveAndMarkDNF()
+        } else if (state === 'INSPECTING' || state === 'READYING_RED' || state === 'READYING_GREEN') {
+          invalidatedRef.current = true
+          cancelInspection()
+        }
+      } else {
+        if (invalidatedRef.current) {
+          showFocusToast('Solve invalidated because the app lost focus.')
+          invalidatedRef.current = false
+        }
+      }
+    }
+
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [cancelInspection, showFocusToast, stopSolveAndMarkDNF])
+
+
   // Compute cube position: centered, but shifted up slightly on desktop
-  const cubeTop = isMobile
-    ? `calc(50% - ${cubeSize / 2}px - 30px)` // center-ish, above timer
-    : '50%'
+  // Cube top position is currently unused; keep for future layout tweaks.
+  // (No-op for now to avoid React unused warnings.)
+  void cubeTop
 
   return (
     <div style={{
@@ -476,6 +556,7 @@ export default function App() {
       fontFamily: '"Inter", sans-serif',
       touchAction: 'none',
     }}>
+
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&display=swap');
 
